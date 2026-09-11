@@ -12,7 +12,7 @@ First ask the user for the full HTTPS URL of their Dynatrace instance unless the
 
 Use the actual platform URL supplied by the customer, including an internal lab domain when applicable. Put the chosen context name in your ignored `local.json`. Colleagues authenticate independently; cloning the repository does not copy credentials or tenant configuration.
 
-Commands here use the macOS/Linux project-local binary. If you install dtctl elsewhere, use its path or `dtctl` on PATH and optionally set `"dtctl": "/path/to/dtctl"` in local.json. The bundled installer supports macOS and Linux; on Windows use WSL for these commands or install the official Windows executable and set the config path. AI-provider support does not imply that this installer supports every OS.
+Commands here use the macOS/Linux project-local binary. If you install dtctl elsewhere, use its path or `dtctl` on PATH and optionally set `"dtctl": "/path/to/dtctl"` in local.json. The bundled installer pins dtctl 0.38.0 and supports macOS/Linux on arm64 and x86_64; on Windows use WSL for these commands or install the official Windows executable and set the config path. AI-provider support does not imply that this installer supports every OS.
 
 ## Establish context before querying
 
@@ -29,6 +29,17 @@ Check the environment and readonly safety level. `inventory` describes available
 For pipeline runs, pass the user-selected URL with `python3 recommend.py run --config local.json --environment USER_PROVIDED_URL`, or answer the interactive instance prompt. The CLI checks the context URL and readonly safety level before any inventory request.
 
 Use explicit `--context` on operations to avoid querying whichever tenant happens to be globally selected. Do not use `auth whoami` as a connectivity probe; its scope requirements can differ from ordinary read operations. Avoid `--debug` and `-vv`, which may expose authentication headers.
+
+## Common setup issues
+
+| Symptom | Next step |
+|---|---|
+| `Ask the user ... --environment URL` | Obtain the instance URL from the human, then pass it as `--environment`; noninteractive runs cannot prompt. |
+| Requested instance does not match the context | Check `local.json` and `config describe-context`. Authenticate the requested instance into the intended context; do not substitute another tenant. |
+| Missing configuration or context | Copy the example on first setup, set customer/context, and complete the browser login. `run` does not create these for you. |
+| Context is not readonly | Create or authenticate a dedicated readonly context using the login command above. |
+| `dtctl failed` | Run `auth status` for the chosen context. Reauthenticate if needed; verify the user has access to the required Smartscape data. A successful login alone does not establish data permissions. |
+| No parseable release or no inventory records | Inspect available diagnostics and upstream schema/content. Do not replace missing data with an assumed older release or a claim of no technology use. |
 
 ## Run the checked-in query
 
