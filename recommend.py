@@ -321,7 +321,7 @@ def select(inventory, pages):
     included, held, excluded, seen = [], [], [], set()
     for page in pages:
         for note in page['items']:
-            identity = (note['title'], note['body'])
+            identity = (page.get('url', note.get('url', '').split('#')[0]), note['title'], note['body'])
             if identity in seen: continue
             seen.add(identity)
             tags = mentioned(note['title']+'\n'+note['body'])
@@ -365,32 +365,53 @@ def technology_label(technology):
     return ALIASES.get(technology, [technology.replace('_',' ').title()])[0]
 
 
+def channel_sections(inventory, selection):
+    """Assign each change to its source release and compute channel-local ranks."""
+    sources = {p['url']:[] for p in selection['source_pages']}
+    for note in selection['included']:
+        source = note['url'].split('#')[0]
+        if source not in sources:
+            raise ValueError('Matched change has no corresponding release source: '+source)
+        sources[source].append(note)
+    sections = []
+    for page in selection['source_pages']:
+        notes = sorted(sources[page['url']], key=lambda n:(-n['usage_score'], n['id']))
+        relevant = {technology for note in notes for technology in note['matched']}
+        rows = sorted((row for row in inventory['ranked'] if row['technology'] in relevant),
+                      key=lambda row:(-row['entity_count'], row['technology']))
+        usage = {row['technology']:dict(row, rank=i) for i,row in enumerate(rows,1)}
+        sections.append((page, notes, usage))
+    return sections
+
+
 def draft_text(config, inventory, selection, today):
     lines = [f"Hello {config['customer']} team,", '',
-             f"Latest Dynatrace releases — checked {today.isoformat()} (UTC)", '']
-    for page in selection['source_pages']:
-        lines.extend([f"• {release_label(page)} — rollout started {page['date']}", f"  {page['url']}"])
-    lines.extend(['', 'This update covers the latest released version in each product channel listed above.',
-                  'Availability in your environment and version or feature prerequisites may vary.', '',
-                  'Technology usage ranking',
-                  f"Based on {inventory['entities']} observed process and host entities.",
-                  'Rank | Technology | Entities | Prevalence | Matched release items',
-                  '-----|------------|----------|------------|----------------------'])
-    usage = {row['technology']:dict(row, rank=i) for i,row in enumerate(inventory['ranked'],1)}
-    for technology, row in usage.items():
-        count = sum(technology in note['matched'] for note in selection['included'])
-        lines.append(f"{row['rank']} | {technology_label(technology)} | {row['entity_count']} | {row['prevalence_pct']:.2f}% | {count}")
-    lines.extend(['', 'Rank is based on distinct observed entities, highest first; ties are ordered alphabetically by technology identifier.',
-                  'Prevalence is the share of all queried entities reporting that technology. Hosts and processes count equally.',
-                  'An entity can report multiple technologies, so percentages can exceed 100% in total. This measures deployment presence, not traffic or business importance.',
-                  f"{inventory['without_technologies']} entities had no technology metadata. A zero item count means no confirmed match for the selected releases, not that the technology is unused.", '',
-                  'Relevant release changes (ordered by technology usage)', ''])
-    if not selection['included']:
-        lines.append('No confirmed technology matches were found for these latest releases. Please review the coverage report before sending an update.')
-    for note in selection['included']:
-        techs = '; '.join(f"#{usage[t]['rank']} {technology_label(t)}: {usage[t]['entity_count']} entities ({usage[t]['prevalence_pct']:.2f}%)" for t in sorted(note['matched'], key=lambda t:usage[t]['rank']))
-        lines.extend([f"• {note['title']}", f"  Usage ranking: {techs}",
-                      f"  {note['release']} — rollout {note['date']}", f"  Details and prerequisites: {note['url']}", ''])
+             f"Latest Dynatrace releases — checked {today.isoformat()} (UTC)", '',
+             'Each section covers the latest released version in that product channel.',
+             'Technology and change rankings restart at 1 within each channel.',
+             f"Usage is based on {inventory['entities']} observed process and host entities; {inventory['without_technologies']} had no technology metadata.",
+             'Within each channel, higher ranks reflect more observed entities using the relevant technologies.',
+             'Prevalence is the share of all queried entities, not a channel-specific percentage. Hosts and processes count equally, and technology percentages overlap.',
+             'Each ranking includes only technologies with matched changes in that channel.',
+             'Deployment presence does not measure traffic or business importance. Version and feature prerequisites may apply.', '']
+    for page, notes, usage in channel_sections(inventory, selection):
+        heading = release_label(page)+' channel'
+        lines.extend([heading, '='*len(heading), f"Rollout started: {page['date']}",
+                      f"Release notes: {page['url']}", ''])
+        if not notes:
+            lines.extend(['No confirmed technology matches for this channel’s latest release.', ''])
+            continue
+        lines.extend(['Technology ranking within this channel',
+                      'Rank | Technology | Entities | Prevalence | Matched release items',
+                      '-----|------------|----------|------------|----------------------'])
+        for technology, row in usage.items():
+            count = sum(technology in note['matched'] for note in notes)
+            lines.append(f"{row['rank']} | {technology_label(technology)} | {row['entity_count']} | {row['prevalence_pct']:.2f}% | {count}")
+        lines.extend(['', 'Ranked changes within this channel', ''])
+        for change_rank, note in enumerate(notes,1):
+            techs = '; '.join(f"#{usage[t]['rank']} {technology_label(t)}: {usage[t]['entity_count']} {'entity' if usage[t]['entity_count']==1 else 'entities'} ({usage[t]['prevalence_pct']:.2f}%)" for t in sorted(note['matched'], key=lambda t:usage[t]['rank']))
+            lines.extend([f"{change_rank}. {note['title']}", f"   Technology rank in this channel: {techs}",
+                          f"   Details and prerequisites: {note['url']}", ''])
     lines += ['Please review the linked notes before planning changes. Technology detection alone does not confirm that a specific version or feature is affected.', '', 'Best regards,', 'Your Dynatrace team']
     return '\n'.join(lines)+'\n'
 

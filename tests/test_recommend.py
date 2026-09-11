@@ -84,14 +84,44 @@ class PipelineTests(unittest.TestCase):
             pages=r.fetch_releases({'channels':['oneagent','saas']},Path(tmp),r.date(2026,9,10))
             self.assertEqual([(p['channel'],p['version']) for p in pages],[('oneagent','1.4'),('saas','1.5')])
 
-    def test_email_has_releases_and_ranking_even_without_matches(self):
+    def test_empty_channel_keeps_release_heading_without_unrelated_rankings(self):
         report={'included':[], 'customer':'Example', 'source_pages':[{'channel':'oneagent','version':'1.4','date':'2026-09-01','url':'https://example.com/release'}]}
         text=r.draft_text({'customer':'Example'},self.inventory(),report,r.date(2026,9,10))
         self.assertIn('OneAgent 1.4',text)
-        self.assertIn('1 | Java | 1 | 33.33% | 0',text)
-        self.assertIn('2 | Node.js | 1 | 33.33% | 0',text)
+        self.assertIn('OneAgent 1.4 channel',text)
+        self.assertNotIn('1 | Java',text)
+        self.assertNotIn('2 | Node.js',text)
         self.assertIn('No confirmed technology matches',text)
         self.assertIn('OneAgent 1.4',r.email_subject(report))
+
+    def test_channels_have_independent_rankings_and_no_mixed_changes(self):
+        inventory=r.rank([{'id':'P1','technologies':[{'type':'JAVA'},{'type':'NODE_JS'}]},
+                          {'id':'P2','technologies':[{'type':'JAVA'}]}])
+        pages=[{'channel':c,'version':'1.4','date':'2026-09-01','url':'https://example.com/'+c} for c in ['oneagent','saas','activegate']]
+        def note(i,channel,title,tech,score):
+            return {'id':i,'url':'https://example.com/'+channel+'#'+i,'title':title,'matched':[tech],'usage_score':score}
+        selection={'source_pages':pages,'included':[note('b','oneagent','Node fix','NODE_JS',1),note('a','oneagent','Java fix','JAVA',2),note('c','saas','Node feature','NODE_JS',1)]}
+        text=r.draft_text({'customer':'Example'},inventory,selection,r.date(2026,9,10))
+        oneagent=text.split('OneAgent 1.4 channel')[1].split('SaaS 1.4 channel')[0]
+        saas=text.split('SaaS 1.4 channel')[1].split('ActiveGate 1.4 channel')[0]
+        self.assertIn('1 | Java | 2 | 100.00% | 1',oneagent)
+        self.assertIn('2 | Node.js | 1 | 50.00% | 1',oneagent)
+        self.assertIn('1. Java fix',oneagent)
+        self.assertIn('2. Node fix',oneagent)
+        self.assertIn('1 | Node.js | 1 | 50.00% | 1',saas)
+        self.assertIn('1. Node feature',saas)
+        self.assertNotIn('Java fix',saas)
+        self.assertNotIn('Node feature',oneagent)
+        self.assertIn('No confirmed technology matches',text.split('ActiveGate 1.4 channel')[1])
+
+    def test_same_change_is_preserved_in_different_channels(self):
+        note={'id':'same','title':'Java fix','body':'Fixed tracing','date':'2026-09-01'}
+        result=r.select(self.inventory(),[{'url':'oneagent','items':[note,note]},{'url':'saas','items':[note]}])
+        self.assertEqual(len(result['included']),2)
+
+    def test_unknown_release_source_is_not_silently_dropped(self):
+        with self.assertRaisesRegex(ValueError,'no corresponding release'):
+            r.channel_sections(self.inventory(),{'source_pages':[], 'included':[{'url':'https://example.com/unknown#fix'}]})
 
     def test_host_os_alias_and_postgres(self):
         data=r.rank([{'id':'H1','os_type':'OS_TYPE_LINUX','technologies':[{'type':'LINUX_SYSTEM'},{'type':'POSTGRE_SQL'}]}])

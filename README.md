@@ -32,7 +32,7 @@ Authentication belongs to dtctl and the OS credential store. Never put tokens in
 
 Every run creates a new timestamped directory under `runs/`:
 
-- `email.txt`: editable customer draft naming the latest release per channel, with a technology ranking table and source links. Every detected technology shows its rank, distinct entity count, prevalence, and matched item count.
+- `email.txt`: editable customer draft naming the latest release per channel, with separate, explicitly labeled OneAgent, SaaS, and ActiveGate channel sections and source links. Each channel ranks only technologies with matched changes, showing rank, distinct entity count, prevalence, and that channel’s matched item count. Both technology ranks and numbered change ranks restart at 1 in each section. Channels with no matches retain their release heading and an explicit no-match message; the full detected inventory remains in the review report.
 - `email-subject.txt`: suggested subject naming the customer and selected releases; approval uses the same subject format.
 - `review.md`: technology ranking and applicability questions.
 - `review.json`: all included, held, and excluded items, reasons, evidence, and source hashes.
@@ -55,7 +55,7 @@ The live query reads Smartscape PROCESS technology arrays from each OneAgent mod
 
 `prevalence = distinct entities with technology / all queried process and host entities`
 
-The denominator includes entities without technology metadata, which are also reported. Technologies overlap, so percentages do not add to 100. Hosts and processes count equally in this first version. This measures observed deployment prevalence, not request volume, CPU consumption, spend, or business criticality. A release item uses the highest entity count among its matched technologies as its sorting score; ties prefer newer releases. Low-prevalence matches are retained.
+The denominator includes entities without technology metadata, which are also reported. Technologies overlap, so percentages do not add to 100. Hosts and processes count equally in this first version. This measures observed deployment prevalence, not request volume, CPU consumption, spend, or business criticality. Within each channel, technology ranks use descending entity count, breaking ties alphabetically by canonical technology identifier. A release item uses the highest entity count among its matched technologies as its sorting score; ties use a stable item ID. The same technology can have different local ranks in different channels. Prevalence always uses the full queried inventory as its denominator, not the channel subset. Low-prevalence matches are retained.
 
 ## Release filtering
 
@@ -65,7 +65,7 @@ There is no lookback window: the latest released version is used regardless of a
 
 Each feature and individual fix is matched using explicit technology aliases with word boundaries. For example, JavaScript does not match Java, and the verb “go” does not match the Go runtime. Items mentioning additional undetected technologies are held. Multiple runtime/library technologies must also appear on at least one shared entity; otherwise their joint applicability is held for review. OS and Kubernetes matches do not require sharing a process ID.
 
-Exact duplicate title/body pairs are collapsed within a run. There is no cross-run delivery ledger: rerunning before a new release appears can repeat notes, so the reviewer must compare previous customer emails. The latest release pages are fetched again on every run, including revisions to their content; older releases are not added because they were recently edited.
+Exact duplicate title/body pairs are collapsed within the same release page. The same change appearing in separate channels remains in each applicable channel section. There is no cross-run delivery ledger: rerunning before a new release appears can repeat notes, so the reviewer must compare previous customer emails. The latest release pages are fetched again on every run, including revisions to their content; older releases are not added because they were recently edited.
 
 ## Coverage and limits
 
