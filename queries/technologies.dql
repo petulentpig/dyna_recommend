@@ -1,0 +1,4 @@
+smartscapeNodes PROCESS
+| fieldsAdd technologies = arrayConcat(process.software_technologies.os, process.software_technologies.java, process.software_technologies.dotnet, process.software_technologies.webserver, process.software_technologies.wsmb, process.software_technologies.php, process.software_technologies.nodejs, process.software_technologies.ruby, process.software_technologies.varnish, process.software_technologies.go, process.software_technologies.python)
+| fields id, technologies
+| append [smartscapeNodes HOST | fields id, technologies = host.software_technologies, os_type = os.type, os_version = os.version]

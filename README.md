@@ -1,1 +1,84 @@
 # dyna_recommend
+
+Create a customer-specific Dynatrace release digest from observed technology usage.
+
+The process queries a read-only dtctl context, ranks detected technologies, reads official OneAgent/SaaS/ActiveGate release notes, and writes an editable email and an internal review report. A named human reviewer exports an `.eml` file for manual sending. There is no automatic email delivery.
+
+## Quick start
+
+Requires Python 3.9+ and dtctl 0.38.0 or a compatible version. No Python packages are required.
+
+```sh
+python3 install_dtctl.py
+.tools/dtctl auth login --context dyna-recommend --environment https://YOUR-ENVIRONMENT.apps.dynatrace.com --safety-level readonly
+cp config.example.json local.json
+# Edit customer/context and the release window in local.json.
+python3 recommend.py run --config local.json
+```
+
+Authentication belongs to dtctl and the OS credential store. Never put tokens in the config or repository. The installed binary is local to `.tools/`; it is not added to global PATH.
+
+## Review and send
+
+Every run creates a new timestamped directory under `runs/`:
+
+- `email.txt`: editable customer draft, ordered by technology prevalence, with source links.
+- `review.md`: technology ranking and applicability questions.
+- `review.json`: all included, held, and excluded items, reasons, evidence, and source hashes.
+- `inventory-raw.json`, `discovery.json`: tenant evidence for internal review.
+- `sources/`: source pages captured for reproducibility.
+
+Review the source notes and edit `email.txt`. Check the customer name and the specific version, operating system, feature flags, or licensing prerequisites. Held items are omitted from the email; add one manually only after confirming applicability.
+
+After review:
+
+```sh
+python3 recommend.py approve runs/RUN_ID --reviewer 'Your name' --to customer@example.com
+```
+
+This creates `approved.eml` with `X-Unsent: 1` and records reviewer, recipient, time, and content hashes in `approval.json`. Open the message in your email client, choose the sender, and send it manually. Export is not proof of delivery. If you edit the draft afterward, run approval again to export the updated content. The approval log records the operator-provided name; it is not an identity authentication system.
+
+## Usage weighting
+
+The live query reads Smartscape PROCESS technology arrays from each OneAgent module plus HOST technologies and OS metadata. Canonical aliases merge equivalent technology names. An entity is counted once per technology, even if several modules or versions report it.
+
+`prevalence = distinct entities with technology / all queried process and host entities`
+
+The denominator includes entities without technology metadata, which are also reported. Technologies overlap, so percentages do not add to 100. Hosts and processes count equally in this first version. This measures observed deployment prevalence, not request volume, CPU consumption, spend, or business criticality. A release item uses the highest entity count among its matched technologies as its sorting score; ties prefer newer releases. Low-prevalence matches are retained.
+
+## Release filtering
+
+The default window is 45 days based on rollout date, not page update date. Future rollouts are excluded. The program discovers release links from each configured official index; missing links, dates, or unparseable pages fail the run instead of claiming there are no changes. It checks up to 20 pages per channel and fails if that cap prevents coverage of the requested window.
+
+Each feature and individual fix is matched using explicit technology aliases with word boundaries. For example, JavaScript does not match Java, and the verb “go” does not match the Go runtime. Items mentioning additional undetected technologies are held. Multiple runtime/library technologies must also appear on at least one shared entity; otherwise their joint applicability is held for review. OS and Kubernetes matches do not require sharing a process ID.
+
+Exact duplicate title/body pairs are collapsed within a run. There is no cross-run delivery ledger: rerunning an overlapping window can repeat notes, so the reviewer must compare previous customer emails. Notes published outside the rollout window but edited recently are not included automatically.
+
+## Coverage and limits
+
+This is a working first version, with live validation against Smartscape. It does not prove that every account technology or every relevant release item has been found:
+
+- The query covers OneAgent process and host technology metadata. Remote managed services, frontend frameworks, extensions, licensing, RUM feature usage, and OTEL-only entities need additional collectors. The inventory command's capability report is preserved as context, not treated as a substitute for technology evidence.
+- Unknown inventory technology types appear in the review report. Extend `ALIASES`/`NORMALIZE` for them; no fuzzy inference is used. An unknown technology mentioned only in prose can escape matching, so human source review remains necessary.
+- Detection establishes presence, not that a customer is affected. Installed versions are collected but version ranges and feature prerequisites are not evaluated automatically.
+- The HTML adapter targets the current release-page structure. Changes described only in tables or headings without body text may be omitted. A nonempty parsed page is not proof of complete extraction.
+- Generic Dynatrace announcements without an explicit technology match are excluded. The output is a link-led digest, not an AI-generated upgrade recommendation.
+- dtctl errors, empty inventories, non-inline results, warnings, or hitting the configured entity limit stop generation. Authentication refresh is handled by dtctl. A failed run may leave diagnostic files but will not produce an approved email.
+
+Customer data, config, downloaded tools, and generated output are ignored by Git. Only source, query templates, and synthetic tests should be committed.
+
+## Tests
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
+Tests exercise deduplication, inventory aliases, false-positive matches, missing technology evidence, separate-entity dependencies, release windows, future releases, parser failure, incomplete queries, and reviewed-message export.
+
+## Sources
+
+- [dtctl](https://github.com/dynatrace-oss/dtctl)
+- [Smartscape core entity technology fields](https://docs.dynatrace.com/docs/semantic-dictionary/model/smartscape/core)
+- [OneAgent release notes](https://docs.dynatrace.com/docs/whats-new/oneagent)
+- [SaaS release notes](https://docs.dynatrace.com/docs/whats-new/saas)
+- [ActiveGate release notes](https://docs.dynatrace.com/docs/whats-new/activegate)
