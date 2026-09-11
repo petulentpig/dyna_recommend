@@ -4,7 +4,7 @@ This runbook is part of the repository so every assistant and operator can use t
 
 ## Set up your own environment
 
-From the repository root, follow the README installer steps, then authenticate with your own tenant and context:
+First ask the user for the full HTTPS URL of their Dynatrace instance unless they already supplied it in this task. Do not substitute the URL of an active or saved context. From the repository root, follow the README installer steps, then authenticate with your own tenant and context:
 
 ```sh
 .tools/dtctl auth login --context my-customer --environment https://YOUR-ENVIRONMENT.apps.dynatrace.com --safety-level readonly
@@ -25,6 +25,8 @@ Commands here use the macOS/Linux project-local binary. If you install dtctl els
 ```
 
 Check the environment and readonly safety level. `inventory` describes available data and capability evidence. A missing capability is not always proof that a technology is absent: process or host technology metadata can provide positive evidence independently.
+
+For pipeline runs, pass the user-selected URL with `python3 recommend.py run --config local.json --environment USER_PROVIDED_URL`, or answer the interactive instance prompt. The CLI checks the context URL and readonly safety level before any inventory request.
 
 Use explicit `--context` on operations to avoid querying whichever tenant happens to be globally selected. Do not use `auth whoami` as a connectivity probe; its scope requirements can differ from ordinary read operations. Avoid `--debug` and `-vv`, which may expose authentication headers.
 

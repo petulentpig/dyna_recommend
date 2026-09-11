@@ -12,6 +12,8 @@ The pipeline is AI-provider independent: it uses Python and dtctl, with no model
 
 ## Quick start
 
+First ask the operator which Dynatrace instance to use and obtain its full HTTPS URL. Each user supplies their own instance; the application never defaults to a tenant from this repository or a saved context.
+
 Requires Python 3.9+ and dtctl 0.38.0 or a compatible version. No Python packages are required.
 
 ```sh
@@ -21,6 +23,8 @@ cp config.example.json local.json
 # Edit customer/context and the release window in local.json.
 python3 recommend.py run --config local.json
 ```
+
+The `run` command asks for the instance URL in an interactive terminal. For an assistant or other noninteractive caller, first obtain the URL from the user and pass `--environment https://THEIR-INSTANCE.apps.dynatrace.com`. Missing input stops noninteractive runs. Before querying, the CLI checks the supplied URL against the configured readonly dtctl context; a mismatch stops without fetching account data. The selected instance is recorded in the internal review report. A URL already supplied for the current task does not need to be requested again.
 
 Authentication belongs to dtctl and the OS credential store. Never put tokens in the config or repository. The installed binary is local to `.tools/`; it is not added to global PATH.
 

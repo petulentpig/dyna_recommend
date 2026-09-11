@@ -14,6 +14,7 @@ from email.policy import SMTP
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.request import Request, urlopen
+from urllib.parse import urlsplit, urlunsplit
 
 ROOT = Path(__file__).resolve().parent
 DOCS = 'https://docs.dynatrace.com/docs'
@@ -71,6 +72,49 @@ def dtctl(config, *args):
         # Never surface verbose HTTP/auth output into reports.
         raise ValueError('dtctl failed for '+args[0]+'. Check auth status and context locally.')
     return json.loads(proc.stdout)
+
+def normalize_environment(value):
+    value = value.strip()
+    parsed = urlsplit(value)
+    if (parsed.scheme != 'https' or not parsed.hostname or parsed.username is not None
+            or parsed.password is not None or parsed.query or parsed.fragment
+            or any(c.isspace() or ord(c) < 32 for c in value)):
+        raise ValueError('Enter the full HTTPS Dynatrace instance URL without credentials, query, or fragment.')
+    # Compare host names case-insensitively and ignore a trailing slash/default HTTPS port.
+    port = parsed.port
+    host = parsed.hostname.lower()
+    if ':' in host:
+        host = '[' + host + ']'
+    netloc = host if port in (None, 443) else host + ':' + str(port)
+    return urlunsplit(('https', netloc, parsed.path.rstrip('/'), '', ''))
+
+
+def choose_environment(explicit=None):
+    if explicit is None:
+        if not sys.stdin.isatty():
+            raise ValueError('Ask the user for their Dynatrace instance URL, then rerun with --environment URL. No instance is assumed.')
+        try:
+            explicit = input('Which Dynatrace instance should this run use? Enter the full HTTPS URL: ')
+        except EOFError:
+            raise ValueError('A Dynatrace instance URL is required.') from None
+    return normalize_environment(explicit)
+
+
+def verify_environment(config, environment):
+    expected = normalize_environment(environment)
+    contexts = dtctl(config, 'config', 'get-contexts', '--no-agent', '-o', 'json')
+    if not isinstance(contexts, list):
+        raise ValueError('Could not read dtctl contexts; no account will be queried.')
+    matches = [c for c in contexts if c.get('Name') == config['context']]
+    if len(matches) != 1:
+        raise ValueError('Configured dtctl context was not found. Authenticate the requested instance first.')
+    context = matches[0]
+    if normalize_environment(context['Environment']) != expected:
+        raise ValueError('The requested Dynatrace instance does not match the configured dtctl context. Update local.json or log in to the requested instance; no account was queried.')
+    if context.get('SafetyLevel') != 'readonly':
+        raise ValueError('Use a readonly dtctl context for this pipeline.')
+    return expected
+
 
 def records_from(envelope, limit):
     if envelope.get('ok') is not True:
@@ -307,7 +351,8 @@ def draft_text(config, inventory, selection, today):
     return '\n'.join(lines)+'\n'
 
 
-def run(config, output):
+def run(config, output, environment):
+    environment = verify_environment(config, environment)
     output.mkdir(parents=True, exist_ok=False)
     today = datetime.now(timezone.utc).date()
     discovery = dtctl(config, 'inventory', '-o', 'json', '--no-agent')
@@ -323,12 +368,12 @@ def run(config, output):
     pages = fetch_releases(config, sources, today)
     selection = select(inventory, pages)
     report = {'status':'needs_review', 'generated_at':datetime.now(timezone.utc).isoformat(),
-              'customer':config['customer'], 'context':config['context'],
+              'customer':config['customer'], 'context':config['context'], 'environment':environment,
               'release_days':config.get('release_days',45), 'inventory':inventory,
               'source_pages':[{k:v for k,v in p.items() if k!='items'} for p in pages], **selection}
     write_json(output/'review.json', report)
     (output/'email.txt').write_text(draft_text(config,inventory,selection,today))
-    summary = ['# Release digest review', '', 'Status: needs human review. No email has been sent.', '',
+    summary = ['# Release digest review', '', 'Status: needs human review. No email has been sent.', '', f'Dynatrace instance: {environment}', '',
                '| Technology | Distinct entities | Prevalence |', '|---|---:|---:|']
     summary.extend(f"| {r['technology']} | {r['entity_count']} | {r['prevalence_pct']}% |" for r in inventory['ranked'])
     summary.extend(['', f"Inventory: {inventory['entities']} entities; {inventory['without_technologies']} without technology metadata.",
@@ -371,6 +416,7 @@ def main():
     r = commands.add_parser('run')
     r.add_argument('--config', default='local.json')
     r.add_argument('--output', type=Path)
+    r.add_argument('--environment', help='User-selected Dynatrace instance HTTPS URL; prompts when interactive')
     a = commands.add_parser('approve')
     a.add_argument('run_dir', type=Path)
     a.add_argument('--reviewer', required=True)
@@ -379,10 +425,11 @@ def main():
     try:
         if args.command == 'run':
             output = args.output or ROOT/'runs'/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
-            run(load(args.config), output)
+            environment = choose_environment(args.environment)
+            run(load(args.config), output, environment)
         else:
             approve(args.run_dir, args.reviewer, args.to)
-    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired) as exc:
+    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired, KeyboardInterrupt) as exc:
         print('ERROR: '+str(exc), file=sys.stderr)
         return 1
     return 0

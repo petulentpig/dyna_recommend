@@ -13,6 +13,8 @@ The application does not call an AI model. Python and dtctl collect data and gen
 
 A cloud coding environment needs its own authorized Dynatrace connectivity and authentication. It does not inherit a developer's desktop keychain. Do not copy credentials into a chat or repository to work around that boundary.
 
+Always ask the user for the instance URL before the first live operation in a task, even when a saved context exists. Reuse their answer within that task. A chat-only review of existing files does not require a new login or live instance selection.
+
 Colleagues clone the repository, install dtctl, log in to their own environment, copy config.example.json to local.json, and set the customer/context. The example contains no customer tenant or credentials.
 
 ## Copyable prompt: generate a draft
@@ -20,13 +22,15 @@ Colleagues clone the repository, install dtctl, log in to their own environment,
 ```text
 Read AGENTS.md, README.md, and docs/DTCTL.md in this repository.
 Generate a release-note email draft using local.json and the shared Python CLI.
-Use the configured customer's read-only dtctl context. If configuration is
-missing, ask for the customer name and environment/context, never a token.
+First ask me which Dynatrace instance to use (full HTTPS URL), unless I already
+provided it in this task. Do not infer it from local.json or an active context.
+Use a readonly dtctl context matching my answer, and pass the answer with
+--environment URL. Ask for the customer name if missing; never ask for a token.
 Report technology ranking, matched items, held items, and coverage limitations.
 Present the draft and review report. Leave the email unapproved and unsent.
 ```
 
-This prompt requires a tool-capable environment. If it cannot run commands, run `python3 recommend.py run --config local.json` locally first.
+This prompt requires a tool-capable environment. If it cannot run commands, run `python3 recommend.py run --config local.json` in a local terminal and answer the instance prompt first.
 
 ## Copyable prompt: review an existing draft
 

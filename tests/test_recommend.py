@@ -67,4 +67,50 @@ class PipelineTests(unittest.TestCase):
         data=r.rank([{'id':'H1','os_type':'OS_TYPE_LINUX','technologies':[{'type':'LINUX_SYSTEM'},{'type':'POSTGRE_SQL'}]}])
         self.assertEqual([x['technology'] for x in data['ranked']],['LINUX','POSTGRES'])
 
+class InstanceSelectionTests(unittest.TestCase):
+    def test_interactive_run_asks_for_instance(self):
+        with patch.object(r.sys.stdin, 'isatty', return_value=True), patch('builtins.input', return_value='https://Example.apps.dynatrace.com/') as ask:
+            self.assertEqual(r.choose_environment(), 'https://example.apps.dynatrace.com')
+            self.assertIn('Dynatrace instance', ask.call_args[0][0])
+
+    def test_noninteractive_run_requires_user_answer(self):
+        with patch.object(r.sys.stdin, 'isatty', return_value=False), patch('builtins.input') as ask:
+            with self.assertRaisesRegex(ValueError, 'Ask the user'):
+                r.choose_environment()
+            ask.assert_not_called()
+
+    def test_supplied_instance_is_not_asked_again(self):
+        with patch('builtins.input') as ask:
+            self.assertEqual(r.choose_environment('https://example.apps.dynatrace.com:443/'), 'https://example.apps.dynatrace.com')
+            ask.assert_not_called()
+
+    def test_bad_or_empty_urls_rejected(self):
+        for url in ['', 'example.apps.dynatrace.com', 'http://example.com',
+                    'https://user:secret@example.com', 'https://example.com?token=secret',
+                    'https://example.com/#dashboard', 'https://bad host.com']:
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                r.normalize_environment(url)
+
+    def contexts(self, safety='readonly'):
+        return [{'Name':'customer', 'Environment':'https://example.apps.dynatrace.com/', 'SafetyLevel':safety}]
+
+    def test_matching_readonly_context_is_accepted(self):
+        with patch.object(r, 'dtctl', return_value=self.contexts()) as call:
+            self.assertEqual(r.verify_environment({'context':'customer'}, 'https://example.apps.dynatrace.com'), 'https://example.apps.dynatrace.com')
+            self.assertEqual(call.call_args[0][1:3], ('config','get-contexts'))
+
+    def test_wrong_instance_stops_before_discovery_and_output(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(r, 'dtctl', return_value=self.contexts()) as call:
+            out=Path(tmp)/'run'
+            with self.assertRaisesRegex(ValueError, 'does not match'):
+                r.run({'context':'customer'},out,'https://other.apps.dynatrace.com')
+            self.assertFalse(out.exists())
+            self.assertEqual(call.call_count,1)
+            self.assertEqual(call.call_args[0][1:3], ('config','get-contexts'))
+
+    def test_missing_or_writable_context_rejected(self):
+        for contexts in [[], self.contexts('readwrite-all')]:
+            with patch.object(r, 'dtctl', return_value=contexts), self.assertRaises(ValueError):
+                r.verify_environment({'context':'customer'}, 'https://example.apps.dynatrace.com')
+
 if __name__=='__main__': unittest.main()
