@@ -4,6 +4,12 @@ Create a customer-specific Dynatrace release digest from observed technology usa
 
 The process queries a read-only dtctl context, ranks detected technologies, reads official OneAgent/SaaS/ActiveGate release notes, and writes an editable email and an internal review report. A named human reviewer exports an `.eml` file for manual sending. There is no automatic email delivery.
 
+## Use with ChatGPT, Claude, or Copilot
+
+The pipeline is AI-provider independent: it uses Python and dtctl, with no model SDK, AI API key, or assistant plugin required. Use any assistant with repository/terminal access to run it, or run it yourself and review the files in a chat assistant.
+
+[AGENTS.md](AGENTS.md) contains the shared workflow. Claude Code and GitHub Copilot have small repository instruction files pointing to that guide. [AI usage and copyable prompts](docs/AI_USAGE.md) covers setup for colleagues, tool-capable assistants, and chat-only review. [The portable dtctl runbook](docs/DTCTL.md) supplies the instructions previously provided by a local skill.
+
 ## Quick start
 
 Requires Python 3.9+ and dtctl 0.38.0 or a compatible version. No Python packages are required.
