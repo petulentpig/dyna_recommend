@@ -55,14 +55,44 @@ class PipelineTests(unittest.TestCase):
             r.approve(p,'Reviewer','review@example.com')
             self.assertIn(b'Human edited draft',(p/'approved.eml').read_bytes())
             self.assertEqual(r.load(p/'approval.json')['eml_sha256'],r.digest((p/'approved.eml').read_bytes()))
-    def test_release_window_and_future_rollout(self):
-        def html(day):
-            return '<h1>Release</h1><span>Rollout start on '+day+'</span><h2>Updates</h2><h3 id="a">Java</h3><p>Update</p>'
+    def test_latest_release_skips_future_and_does_not_fetch_older(self):
+        def html(version, day, content=True):
+            return f'<h1>Release {version}</h1><span>Rollout start on {day}</span>'+('<h2>Updates</h2><h3 id="a">Java</h3><p>Update</p>' if content else '')
         index=' '.join('/whats-new/oneagent/sprint-'+str(i) for i in [5,4,3])
-        with tempfile.TemporaryDirectory() as tmp, patch.object(r,'get_page',side_effect=[index,html('Sep 20, 2026'),html('Sep 01, 2026'),html('Jul 01, 2026')]):
-            pages=r.fetch_releases({'channels':['oneagent'],'release_days':30},Path(tmp),r.date(2026,9,10))
+        with tempfile.TemporaryDirectory() as tmp, patch.object(r,'get_page',side_effect=[index,html('1.5','Sep 20, 2026',False),html('1.4','Sep 01, 2026')]) as get:
+            pages=r.fetch_releases({'channels':['oneagent']},Path(tmp),r.date(2026,9,10))
             self.assertEqual(len(pages),1)
-            self.assertTrue(pages[0]['url'].endswith('sprint-4'))
+            self.assertEqual(pages[0]['version'],'1.4')
+            self.assertEqual(get.call_count,3)
+
+    def test_latest_release_is_used_even_if_old_window_would_exclude_it(self):
+        html='<h1>Release 1.4</h1><span>Rollout start on Jan 01, 2026</span><h3 id="a">Java</h3><p>Update</p>'
+        with tempfile.TemporaryDirectory() as tmp, patch.object(r,'get_page',side_effect=['/whats-new/oneagent/sprint-4',html]):
+            pages=r.fetch_releases({'channels':['oneagent'],'release_days':1},Path(tmp),r.date(2026,9,10))
+            self.assertEqual(pages[0]['version'],'1.4')
+
+    def test_invalid_latest_release_does_not_fall_back(self):
+        html='<h1>Release 1.4</h1><span>Rollout start on Sep 01, 2026</span>'
+        with tempfile.TemporaryDirectory() as tmp, patch.object(r,'get_page',side_effect=['/whats-new/oneagent/sprint-4 /whats-new/oneagent/sprint-3',html]) as get:
+            with self.assertRaisesRegex(ValueError,'no changes'):
+                r.fetch_releases({'channels':['oneagent']},Path(tmp),r.date(2026,9,10))
+            self.assertEqual(get.call_count,2)
+
+    def test_each_channel_gets_its_own_latest_release(self):
+        html='<h1>Release 1.4</h1><span>Rollout start on Sep 01, 2026</span><h3 id="a">Java</h3><p>Update</p>'
+        with tempfile.TemporaryDirectory() as tmp, patch.object(r,'get_page',side_effect=['/whats-new/oneagent/sprint-4',html,'/whats-new/saas/sprint-5',html.replace('1.4','1.5')]):
+            pages=r.fetch_releases({'channels':['oneagent','saas']},Path(tmp),r.date(2026,9,10))
+            self.assertEqual([(p['channel'],p['version']) for p in pages],[('oneagent','1.4'),('saas','1.5')])
+
+    def test_email_has_releases_and_ranking_even_without_matches(self):
+        report={'included':[], 'customer':'Example', 'source_pages':[{'channel':'oneagent','version':'1.4','date':'2026-09-01','url':'https://example.com/release'}]}
+        text=r.draft_text({'customer':'Example'},self.inventory(),report,r.date(2026,9,10))
+        self.assertIn('OneAgent 1.4',text)
+        self.assertIn('1 | Java | 1 | 33.33% | 0',text)
+        self.assertIn('2 | Node.js | 1 | 33.33% | 0',text)
+        self.assertIn('No confirmed technology matches',text)
+        self.assertIn('OneAgent 1.4',r.email_subject(report))
+
     def test_host_os_alias_and_postgres(self):
         data=r.rank([{'id':'H1','os_type':'OS_TYPE_LINUX','technologies':[{'type':'LINUX_SYSTEM'},{'type':'POSTGRE_SQL'}]}])
         self.assertEqual([x['technology'] for x in data['ranked']],['LINUX','POSTGRES'])

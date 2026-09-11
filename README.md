@@ -20,7 +20,7 @@ Requires Python 3.9+ and dtctl 0.38.0 or a compatible version. No Python package
 python3 install_dtctl.py
 .tools/dtctl auth login --context dyna-recommend --environment https://YOUR-ENVIRONMENT.apps.dynatrace.com --safety-level readonly
 cp config.example.json local.json
-# Edit customer/context and the release window in local.json.
+# Edit customer/context in local.json.
 python3 recommend.py run --config local.json
 ```
 
@@ -32,7 +32,8 @@ Authentication belongs to dtctl and the OS credential store. Never put tokens in
 
 Every run creates a new timestamped directory under `runs/`:
 
-- `email.txt`: editable customer draft, ordered by technology prevalence, with source links.
+- `email.txt`: editable customer draft naming the latest release per channel, with a technology ranking table and source links. Every detected technology shows its rank, distinct entity count, prevalence, and matched item count.
+- `email-subject.txt`: suggested subject naming the customer and selected releases; approval uses the same subject format.
 - `review.md`: technology ranking and applicability questions.
 - `review.json`: all included, held, and excluded items, reasons, evidence, and source hashes.
 - `inventory-raw.json`, `discovery.json`: tenant evidence for internal review.
@@ -58,11 +59,13 @@ The denominator includes entities without technology metadata, which are also re
 
 ## Release filtering
 
-The default window is 45 days based on rollout date, not page update date. Future rollouts are excluded. The program discovers release links from each configured official index; missing links, dates, or unparseable pages fail the run instead of claiming there are no changes. It checks up to 20 pages per channel and fails if that cap prevents coverage of the requested window.
+Every run fetches the official indexes again and selects exactly one release per configured channel: the highest sprint version whose documented rollout date is on or before the run date (UTC). OneAgent, SaaS, and ActiveGate can have different latest versions. Planned future rollouts are skipped, including planned pages with no change details yet. The selected releases and rollout dates appear at the top of the email and in its suggested subject, even if they have no matched items.
+
+There is no lookback window: the latest released version is used regardless of age. The obsolete `release_days` setting is ignored in existing configurations and removed from the example. Missing links, versions, dates, or change details in the latest eligible page fail the run rather than silently substituting older releases. Discovery checks at most 20 candidates per channel and fails if no released version is found. The report covers the published release, not proof that it has been deployed to the customer tenant.
 
 Each feature and individual fix is matched using explicit technology aliases with word boundaries. For example, JavaScript does not match Java, and the verb “go” does not match the Go runtime. Items mentioning additional undetected technologies are held. Multiple runtime/library technologies must also appear on at least one shared entity; otherwise their joint applicability is held for review. OS and Kubernetes matches do not require sharing a process ID.
 
-Exact duplicate title/body pairs are collapsed within a run. There is no cross-run delivery ledger: rerunning an overlapping window can repeat notes, so the reviewer must compare previous customer emails. Notes published outside the rollout window but edited recently are not included automatically.
+Exact duplicate title/body pairs are collapsed within a run. There is no cross-run delivery ledger: rerunning before a new release appears can repeat notes, so the reviewer must compare previous customer emails. The latest release pages are fetched again on every run, including revisions to their content; older releases are not added because they were recently edited.
 
 ## Coverage and limits
 
@@ -83,7 +86,7 @@ Customer data, config, downloaded tools, and generated output are ignored by Git
 python3 -m unittest discover -s tests -v
 ```
 
-Tests exercise deduplication, inventory aliases, false-positive matches, missing technology evidence, separate-entity dependencies, release windows, future releases, parser failure, incomplete queries, and reviewed-message export.
+Tests exercise deduplication, inventory aliases, false-positive matches, missing technology evidence, separate-entity dependencies, latest releases per channel, future releases, email ranking and release labels, parser failure, incomplete queries, and reviewed-message export.
 
 ## Sources
 

@@ -1,7 +1,10 @@
 {
   "customer": "Customer",
   "context": "dyna-recommend",
-  "release_days": 45,
-  "channels": ["oneagent", "saas", "activegate"],
+  "channels": [
+    "oneagent",
+    "saas",
+    "activegate"
+  ],
   "entity_limit": 100000
 }

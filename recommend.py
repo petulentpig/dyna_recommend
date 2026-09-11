@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from email.message import EmailMessage
 from email.policy import SMTP
 from html.parser import HTMLParser
@@ -209,15 +209,26 @@ def get_page(url):
             time.sleep(attempt+1)
 
 
-def parse_release(html, url):
+def release_metadata(html, url):
     dom = DOM(html)
-    # Dates are taken from rendered rollout metadata, never from a guessed sprint schedule.
     text = ' '.join(n.text() for n in dom.root.walk() if n.tag == 'span')
     match = re.search(r'Rollout start(?:s)? (?:on )?([A-Z][a-z]{2} \d{1,2}, \d{4})', text)
     if not match:
         raise ValueError('Release page has no recognized rollout date: '+url)
     released = datetime.strptime(match[1], '%b %d, %Y').date().isoformat()
     title = next((n.text() for n in dom.root.walk() if n.tag == 'h1'), '')
+    version = re.search(r'\b\d+\.\d+(?:\.\d+)*\b', title)
+    if not version:
+        raise ValueError('Release page has no recognized version: '+url)
+    channel = url.split('/whats-new/', 1)[1].split('/')[0]
+    return {'url':url, 'title':title, 'date':released, 'version':version[0],
+            'channel':channel, 'sha256':digest(html.encode())}
+
+
+def parse_release(html, url):
+    metadata = release_metadata(html, url)
+    title, released = metadata['title'], metadata['date']
+    dom = DOM(html)
     items, current, section, active = [], None, '', False
     def flush():
         nonlocal current
@@ -262,13 +273,16 @@ def parse_release(html, url):
     items = [i for i in items if i['body']]
     if not items:
         raise ValueError('Release parser found no changes: '+url)
-    return {'url':url, 'title':title, 'date':released, 'sha256':digest(html.encode()), 'items':items}
+    return dict(metadata, items=items)
 
 
 def fetch_releases(config, out, today):
-    cutoff = today-timedelta(days=config.get('release_days', 45))
+    """Discover the highest released sprint in each channel, freshly on every run."""
     pages = []
-    for channel in config['channels']:
+    channels = config['channels']
+    if not channels:
+        raise ValueError('Configure at least one release channel')
+    for channel in dict.fromkeys(channels):
         if channel not in {'oneagent','saas','activegate'}:
             raise ValueError('Unsupported release channel: '+channel)
         index = get_page(DOCS+'/whats-new/'+channel)
@@ -276,21 +290,19 @@ def fetch_releases(config, out, today):
         if not paths:
             raise ValueError('No release links found for '+channel)
         paths = sorted(paths, key=lambda p:int(p.rsplit('-',1)[1]), reverse=True)
-        reached_cutoff = False
         for path in paths[:20]:
             url = DOCS+path
             html = get_page(url)
-            page = parse_release(html, url)
-            released = date.fromisoformat(page['date'])
-            if released > today:
+            metadata = release_metadata(html, url)
+            if date.fromisoformat(metadata['date']) > today:
                 continue
-            if released < cutoff:
-                reached_cutoff = True
-                break
+            # A malformed newest release must fail, never silently fall back to an older one.
+            page = parse_release(html, url)
             (out/(channel+'-'+path.rsplit('/',1)[1]+'.html')).write_text(html)
             pages.append(page)
-        if not reached_cutoff and len(paths)>20:
-            raise ValueError('Release discovery hit its page limit; narrow release_days')
+            break
+        else:
+            raise ValueError('No released version found within the discovery limit for '+channel)
     return pages
 
 
@@ -335,17 +347,49 @@ def select(inventory, pages):
     return {'included':included, 'held':held, 'excluded':excluded}
 
 
+def release_label(page):
+    names = {'oneagent':'OneAgent', 'saas':'SaaS', 'activegate':'ActiveGate'}
+    if page.get('version') and page.get('channel'):
+        return names.get(page['channel'], page['channel'])+' '+page['version']
+    return page['title']  # Compatibility with existing review reports.
+
+
+def email_subject(report):
+    releases = '; '.join(release_label(p) for p in report.get('source_pages', []))
+    return f"Dynatrace updates — {report['customer']}" + (f" — {releases}" if releases else '')
+
+
+def technology_label(technology):
+    if technology == 'GO':
+        return 'Go'
+    return ALIASES.get(technology, [technology.replace('_',' ').title()])[0]
+
+
 def draft_text(config, inventory, selection, today):
     lines = [f"Hello {config['customer']} team,", '',
-             'Here are recent Dynatrace updates relevant to technologies detected in your environment.',
-             'Items are ordered by observed deployment prevalence. Version and feature prerequisites may apply.', '']
+             f"Latest Dynatrace releases — checked {today.isoformat()} (UTC)", '']
+    for page in selection['source_pages']:
+        lines.extend([f"• {release_label(page)} — rollout started {page['date']}", f"  {page['url']}"])
+    lines.extend(['', 'This update covers the latest released version in each product channel listed above.',
+                  'Availability in your environment and version or feature prerequisites may vary.', '',
+                  'Technology usage ranking',
+                  f"Based on {inventory['entities']} observed process and host entities.",
+                  'Rank | Technology | Entities | Prevalence | Matched release items',
+                  '-----|------------|----------|------------|----------------------'])
+    usage = {row['technology']:dict(row, rank=i) for i,row in enumerate(inventory['ranked'],1)}
+    for technology, row in usage.items():
+        count = sum(technology in note['matched'] for note in selection['included'])
+        lines.append(f"{row['rank']} | {technology_label(technology)} | {row['entity_count']} | {row['prevalence_pct']:.2f}% | {count}")
+    lines.extend(['', 'Rank is based on distinct observed entities, highest first; ties are ordered alphabetically by technology identifier.',
+                  'Prevalence is the share of all queried entities reporting that technology. Hosts and processes count equally.',
+                  'An entity can report multiple technologies, so percentages can exceed 100% in total. This measures deployment presence, not traffic or business importance.',
+                  f"{inventory['without_technologies']} entities had no technology metadata. A zero item count means no confirmed match for the selected releases, not that the technology is unused.", '',
+                  'Relevant release changes (ordered by technology usage)', ''])
     if not selection['included']:
-        lines.append('No confirmed technology matches were found in this release window. Please review the coverage report before sending an update.')
-    usage = {r['technology']:r for r in inventory['ranked']}
+        lines.append('No confirmed technology matches were found for these latest releases. Please review the coverage report before sending an update.')
     for note in selection['included']:
-        techs = ', '.join(f"{t} ({usage[t]['entity_count']} observed entities)" for t in note['matched'])
-        # Link-led digest: exact title, no speculative LLM impact/upgrade recommendation.
-        lines.extend([f"• {note['title']}", f"  Relevant technology: {techs}",
+        techs = '; '.join(f"#{usage[t]['rank']} {technology_label(t)}: {usage[t]['entity_count']} entities ({usage[t]['prevalence_pct']:.2f}%)" for t in sorted(note['matched'], key=lambda t:usage[t]['rank']))
+        lines.extend([f"• {note['title']}", f"  Usage ranking: {techs}",
                       f"  {note['release']} — rollout {note['date']}", f"  Details and prerequisites: {note['url']}", ''])
     lines += ['Please review the linked notes before planning changes. Technology detection alone does not confirm that a specific version or feature is affected.', '', 'Best regards,', 'Your Dynatrace team']
     return '\n'.join(lines)+'\n'
@@ -369,10 +413,11 @@ def run(config, output, environment):
     selection = select(inventory, pages)
     report = {'status':'needs_review', 'generated_at':datetime.now(timezone.utc).isoformat(),
               'customer':config['customer'], 'context':config['context'], 'environment':environment,
-              'release_days':config.get('release_days',45), 'inventory':inventory,
+              'release_selection':'latest_released_per_channel', 'inventory':inventory,
               'source_pages':[{k:v for k,v in p.items() if k!='items'} for p in pages], **selection}
     write_json(output/'review.json', report)
-    (output/'email.txt').write_text(draft_text(config,inventory,selection,today))
+    (output/'email.txt').write_text(draft_text(config,inventory,report,today))
+    (output/'email-subject.txt').write_text(email_subject(report)+'\n')
     summary = ['# Release digest review', '', 'Status: needs human review. No email has been sent.', '', f'Dynatrace instance: {environment}', '',
                '| Technology | Distinct entities | Prevalence |', '|---|---:|---:|']
     summary.extend(f"| {r['technology']} | {r['entity_count']} | {r['prevalence_pct']}% |" for r in inventory['ranked'])
@@ -399,7 +444,7 @@ def approve(run_dir, reviewer, recipient):
     if not body.strip(): raise ValueError('Draft is empty')
     message = EmailMessage(policy=SMTP)
     message['To'] = recipient
-    message['Subject'] = f"Dynatrace technology updates — {report['customer']}"
+    message['Subject'] = email_subject(report)
     message['X-Unsent'] = '1'
     message.set_content(body)
     payload = message.as_bytes()
